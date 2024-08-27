@@ -5,8 +5,11 @@
 #include <string.h>
 #include <math.h>
 
-#include "../glad/glad.h"
-#include <GLFW/glfw3.h>
+#include "gl.h"
+#include "noise.h"
+#include "texture.h"
+#include "report.h"
+#include "float3.h"
 
 GLFWwindow *new_window()
 {
@@ -32,42 +35,10 @@ GLFWwindow *new_window()
 		return NULL;
 	}
 
-	// // Set up callbacks
-	// glfwSetCursorPosCallback(window, mouse_callback);
-	// glfwSetMouseButtonCallback(window, mouse_button_callback);
-	// glfwSetKeyCallback(window, keyboard_callback);
-
 	const GLubyte* renderer = glGetString(GL_RENDERER);
-
 	printf("Renderer: %s\n", renderer);
+
 	return window;
-}
-
-void assert(bool cond, const char *fmt, ...)
-{
-	if (cond)
-		return;
-
-	va_list args;
-	va_start(args, fmt);
-	va_end(args);
-
-	printf("[#] ");
-	vprintf(fmt, args);
-	fflush(stdout);
-
-	abort();
-}
-
-void info(const char *fmt, ...)
-{
-	va_list args;
-	va_start(args, fmt);
-	va_end(args);
-
-	printf("[I] ");
-	vprintf(fmt, args);
-	fflush(stdout);
 }
 
 typedef struct {
@@ -144,184 +115,119 @@ bool link_program(GLuint program)
 }
 
 typedef struct {
-	GLuint ref;
-	int width;
-	int height;
-} gl_texture;
+	float3 eye;
 
-typedef struct {
-	void *data;
-	int width;
-	int height;
-	GLuint internal;
-	GLuint format;
-	GLuint type;
-} gl_texture_create_info;
+	// Axial directions
+	float3 front;
+	float3 right;
+	float3 up;
 
-gl_texture new_texture(gl_texture_create_info info)
-{
-	gl_texture result;
-	result.width = info.width;
-	result.height = info.height;
+	float pitch;
+	float yaw;
+} camera_data;
 
-	glGenTextures(1, &result.ref);
-	glBindTexture(GL_TEXTURE_2D, result.ref);
-	glTexImage2D(GL_TEXTURE_2D, 0, info.internal, info.width, info.height, 0, info.format, info.type, info.data);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-
-	return result;
-}
-
-static inline int32_t fastfloor(float fp)
-{
-	int32_t i = (int32_t) fp;
-	return (fp < i) ? (i - 1) : (i);
-}
-
-static const uint8_t perm[256] = {
-	151, 160, 137, 91, 90, 15,
-	131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23,
-	190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32, 57, 177, 33,
-	88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166,
-	77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244,
-	102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196,
-	135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123,
-	5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42,
-	223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9,
-	129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228,
-	251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249, 14, 239, 107,
-	49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254,
-	138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180
+static camera_data camera = {
+	.eye = { 0, 0, 0 },
+	.front = { 0, 0, 1 },
+	.right = { 1, 0, 0 },
+	.up = { 0, 1, 0 },
+	.pitch = 0,
+	.yaw = 0,
 };
 
-static inline uint8_t hash(int32_t i)
+float clamp(float x, float min, float max)
 {
-    return perm[(uint8_t) i];
+	return fmin(max, fmax(min, x));
 }
 
-static float grad(int32_t hash, float x, float y)
+void camera_delta_yaw_pitch(camera_data *const camera, float dyaw, float dpitch)
 {
-    const int32_t h = hash & 0x3F;
-    const float u = h < 4 ? x : y;
-    const float v = h < 4 ? y : x;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -2.0f * v : 2.0f * v);
+	static const float BORDER_EPSILON = 0.01f;
+	static const float BORDER_PITCH = M_PI_4 - BORDER_EPSILON;
+	static const float3 UP = { 0, 1, 0 };
+
+	camera->yaw += dyaw;
+	camera->pitch = clamp(camera->pitch + dpitch, -BORDER_PITCH, BORDER_PITCH);
+
+	camera->front = f3_spherical(1, camera->pitch, camera->yaw);
+	camera->right = f3_cross(camera->front, UP);
+	camera->up = f3_cross(camera->right, camera->front);
+
+	printf("front: %f/%f/%f\n", camera->front.x, camera->front.y, camera->front.z);
 }
 
-float perlin_simplex_noise(float x, float y)
+void gl_send_uniform_int(GLuint program, const char *name, int value)
 {
-	float n0;
-	float n1;
-	float n2;
+	GLint location = glGetUniformLocation(program, name);
+	return glUniform1i(location, value);
+}
 
-	static const float F2 = 0.366025403f;
-	static const float G2 = 0.211324865f;
+void gl_send_uniform_f3(GLuint program, const char *name, float3 value)
+{
+	GLint location = glGetUniformLocation(program, name);
+	return glUniform3f(location, value.x, value.y, value.z);
+}
 
-	const float s = (x + y) * F2;
-	const float xs = x + s;
-	const float ys = y + s;
-	const int32_t i = fastfloor(xs);
-	const int32_t j = fastfloor(ys);
+void camera_send_uniforms(camera_data *const camera, GLuint program)
+{
+	gl_send_uniform_f3(program, "camera.eye", camera->eye);
+	gl_send_uniform_f3(program, "camera.front", camera->front);
+	gl_send_uniform_f3(program, "camera.right", camera->right);
+	gl_send_uniform_f3(program, "camera.up", camera->up);
+}
 
-	const float t = (float) (i + j) * G2;
-	const float X0 = i - t;
-	const float Y0 = j - t;
-	const float x0 = x - X0;
-	const float y0 = y - Y0;
+struct {
+	float last_x;
+	float last_y;
+	bool initial;
+	bool dragging;
+} static mouse = {
+	.initial = true,
+	.dragging = false
+};
 
-	int32_t i1, j1;
-	if (x0 > y0) {
-		i1 = 1;
-		j1 = 0;
-	} else {
-		i1 = 0;
-		j1 = 1;
+void glfw_mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
+{
+	if (button == GLFW_MOUSE_BUTTON_LEFT) {
+		if (action == GLFW_PRESS)
+			mouse.dragging = true;
+		else if (action == GLFW_RELEASE)
+			mouse.dragging = false;
 	}
+}
 
-	const float x1 = x0 - i1 + G2;
-	const float y1 = y0 - j1 + G2;
-	const float x2 = x0 - 1.0f + 2.0f * G2;
-	const float y2 = y0 - 1.0f + 2.0f * G2;
+void glfw_mouse_cursor_callback(GLFWwindow *window, double x, double y)
+{
+	static const float SENSIVITY = 0.001f;
 
-	const int gi0 = hash(i + hash(j));
-	const int gi1 = hash(i + i1 + hash(j + j1));
-	const int gi2 = hash(i + 1 + hash(j + 1));
-
-	float t0 = 0.5f - x0*x0 - y0*y0;
-	if (t0 < 0.0f) {
-		n0 = 0.0f;
-	} else {
-		t0 *= t0;
-		n0 = t0 * t0 * grad(gi0, x0, y0);
+	if (mouse.initial) {
+		mouse.last_x = x;
+		mouse.last_y = y;
+		mouse.initial = false;
 	}
-
-	float t1 = 0.5f - x1*x1 - y1*y1;
-	if (t1 < 0.0f) {
-		n1 = 0.0f;
-	} else {
-		t1 *= t1;
-		n1 = t1 * t1 * grad(gi1, x1, y1);
-	}
-
-	float t2 = 0.5f - x2*x2 - y2*y2;
-	if (t2 < 0.0f) {
-		n2 = 0.0f;
-	} else {
-		t2 *= t2;
-		n2 = t2 * t2 * grad(gi2, x2, y2);
-	}
-
-	float n = 45.23065f * (n0 + n1 + n2);
 	
-	return 0.5f * (n + 1);
-}
+	double dx = mouse.last_x - x;
+	double dy = mouse.last_y - y;
 
-typedef struct {
-	float *data;
-	int width;
-	int height;
-} noise_texture;
+	mouse.last_x = x;
+	mouse.last_y = y;
+	
+	dx *= SENSIVITY;
+	dy *= SENSIVITY;
 
-noise_texture perlin_noise(int width, int height)
-{
-	noise_texture result;
-	result.data = (float *) malloc(width * height * sizeof(float));
-	result.width = width;
-	result.height = height;
-
-	for (int y = 0; y < height; y++) {
-		for (int x = 0; x < width; x++) {
-			float noise = 0;
-			noise += perlin_simplex_noise((float) x / width, (float) y / height);
-			noise += 0.5 * perlin_simplex_noise((float) 2 * x / width, (float) 2 * y / height);
-			noise += 0.25 * perlin_simplex_noise((float) 4 * x / width, (float) 4 * y / height);
-			noise += 0.125 * perlin_simplex_noise((float) 8 * x / width, (float) 8 * y / height);
-			noise += 0.0625 * perlin_simplex_noise((float) 16 * x / width, (float) 16 * y / height);
-			noise += 0.03125 * perlin_simplex_noise((float) 32 * x / width, (float) 32 * y / height);
-			result.data[x + y * width] = noise/2;
-		}
-	}
-
-	return result;
-}
-
-void gl_debug_callback
-(
-	GLenum source,
-	GLenum type,
-	GLuint id,
-	GLenum severity,
-	GLsizei length,
-	const GLchar *message,
-	const void *user
-)
-{
-	info("(GL) %s\n", message);
+	// Only drag when left mouse button is pressed
+	if (mouse.dragging)
+		camera_delta_yaw_pitch(&camera, dx, dy);
 }
 
 int main()
 {
 	GLFWwindow *window = new_window();
+
+	// Window input callbacks
+	glfwSetCursorPosCallback(window, glfw_mouse_cursor_callback);
+	glfwSetMouseButtonCallback(window, glfw_mouse_button_callback);
+	// glfwSetKeyCallback(window, keyboard_callback);
 
 	glEnable(GL_DEBUG_OUTPUT);
 	glDebugMessageCallback(gl_debug_callback, NULL);
@@ -399,6 +305,11 @@ int main()
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, heightfield_texture.ref);
 
+		camera_send_uniforms(&camera, linked_primary);
+
+		gl_send_uniform_int(linked_primary, "framebuffer.width", target_texture.width);
+		gl_send_uniform_int(linked_primary, "framebuffer.height", target_texture.height);
+
 		glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 	
 		// Blitting pass to presene the pixelated texture	
@@ -413,7 +324,7 @@ int main()
 		glUseProgram(linked_blitting);
 
 		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, heightfield_texture.ref);
+		glBindTexture(GL_TEXTURE_2D, target_texture.ref);
 
 		glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
