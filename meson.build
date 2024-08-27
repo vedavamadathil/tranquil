@@ -1,8 +1,10 @@
 project('tranquil', 'c')
 
+cc = meson.get_compiler('c')
+math = cc.find_library('m', required : false)
 glfw = dependency('glfw3')
 
 executable('tranquil',
-	'main.c',
+	'source/main.c',
 	'glad/glad.c',
-	dependencies: glfw)
+	dependencies: [ glfw, math ])
