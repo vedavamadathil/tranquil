@@ -31,3 +31,12 @@ float3 f3_cross(float3 a, float3 b)
 	c.z = a.x * b.y - a.y * b.x;
 	return c;
 }
+
+float3 f3_fma(float3 a, float3 b, float k)
+{
+	float3 c;
+	c.x = a.x + b.x * k;
+	c.y = a.y + b.y * k;
+	c.z = a.z + b.z * k;
+	return c;
+}

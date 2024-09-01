@@ -18,7 +18,7 @@ GLFWwindow *new_window()
 	if (!glfwInit())
 		return NULL;
 
-	window = glfwCreateWindow(800, 600, "Tranquil", NULL, NULL);
+	window = glfwCreateWindow(1920, 1080, "Tranquil", NULL, NULL);
 
 	// Check if window was created
 	if (!window) {
@@ -142,8 +142,8 @@ float clamp(float x, float min, float max)
 
 void camera_delta_yaw_pitch(camera_data *const camera, float dyaw, float dpitch)
 {
-	static const float BORDER_EPSILON = 0.01f;
-	static const float BORDER_PITCH = M_PI_4 - BORDER_EPSILON;
+	static const float BORDER_EPSILON = 0.001f;
+	static const float BORDER_PITCH = M_PI_2 - BORDER_EPSILON;
 	static const float3 UP = { 0, 1, 0 };
 
 	camera->yaw += dyaw;
@@ -152,8 +152,6 @@ void camera_delta_yaw_pitch(camera_data *const camera, float dyaw, float dpitch)
 	camera->front = f3_spherical(1, camera->pitch, camera->yaw);
 	camera->right = f3_cross(camera->front, UP);
 	camera->up = f3_cross(camera->right, camera->front);
-
-	printf("front: %f/%f/%f\n", camera->front.x, camera->front.y, camera->front.z);
 }
 
 void gl_send_uniform_int(GLuint program, const char *name, int value)
@@ -265,11 +263,12 @@ int main()
 
 	gl_texture_create_info target_create_info = {
 		.data = NULL,
-		.width = 512,
-		.height = 512,
+		.width = 256,
+		.height = 256,
 		.internal = GL_RGB,
 		.format = GL_RGB,
-		.type = GL_UNSIGNED_INT
+		.type = GL_UNSIGNED_INT,
+		.filtering = GL_NEAREST
 	};
 
 	gl_texture target_texture = new_texture(target_create_info);
@@ -287,7 +286,8 @@ int main()
 		.height = heightfield.height,
 		.internal = GL_R32F,
 		.format = GL_RED,
-		.type = GL_FLOAT
+		.type = GL_FLOAT,
+		.filtering = GL_LINEAR
 	};
 
 	gl_texture heightfield_texture = new_texture(heightfield_create_info);
@@ -329,5 +329,21 @@ int main()
 		glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
 		glfwSwapBuffers(window);
+
+		const float speed = 0.01f;
+		if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
+			camera.eye = f3_fma(camera.eye, camera.up, speed);
+		else if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
+			camera.eye = f3_fma(camera.eye, camera.up, -speed);
+		
+		if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+			camera.eye = f3_fma(camera.eye, camera.front, speed);
+		else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+			camera.eye = f3_fma(camera.eye, camera.front, -speed);
+		
+		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+			camera.eye = f3_fma(camera.eye, camera.right, speed);
+		else if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+			camera.eye = f3_fma(camera.eye, camera.right, -speed);
 	}
 }
